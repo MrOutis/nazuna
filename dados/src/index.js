@@ -1807,19 +1807,22 @@ async function NazuninhaBotExec(nazu, info, store, messagesCache, rentalExpirati
             removeCaptcha(sender);
             
             // Também limpa do arquivo do grupo (async para não bloquear)
-            readJsonFileAsync(groupPath, {}).then(async groupDataCaptcha => {
+            readJsonFileAsync(groupPath, {}).then((groupDataCaptcha) => {
+              let chain = Promise.resolve();
+
               if (groupDataCaptcha.pendingCaptchas?.[sender]) {
                 delete groupDataCaptcha.pendingCaptchas[sender];
-                await writeJsonFileAsync(groupPath, groupDataCaptcha);
+                chain = chain.then(() => writeJsonFileAsync(groupPath, groupDataCaptcha));
               }
-              
-              // Notificação X9
+
               if (groupDataCaptcha.x9) {
-                await nazu.sendMessage(captchaData.groupId, {
+                chain = chain.then(() => nazu.sendMessage(captchaData.groupId, {
                   text: `✅ *X9 Report:* @${sender.split('@')[0]} passou na verificação de captcha e foi aprovado automaticamente.`,
                   mentions: [sender],
-                }).catch(err => console.error(`❌ Erro ao enviar X9: ${err.message}`));
+                }));
               }
+
+              return chain.catch(err => console.error(`❌ Erro ao limpar/enviar X9 do captcha: ${err.message}`));
             }).catch(err => console.error('Erro ao limpar captcha do arquivo:', err));
             
           } catch (err) {
@@ -1839,10 +1842,10 @@ async function NazuninhaBotExec(nazu, info, store, messagesCache, rentalExpirati
             removeCaptcha(sender);
             
             // Também limpa do arquivo do grupo (async)
-            readJsonFileAsync(groupPath, {}).then(async groupDataCaptcha => {
+            readJsonFileAsync(groupPath, {}).then((groupDataCaptcha) => {
               if (groupDataCaptcha.pendingCaptchas?.[sender]) {
                 delete groupDataCaptcha.pendingCaptchas[sender];
-                await writeJsonFileAsync(groupPath, groupDataCaptcha);
+                return writeJsonFileAsync(groupPath, groupDataCaptcha);
               }
             }).catch(err => console.error('Erro ao limpar captcha do arquivo:', err));
             
@@ -3412,11 +3415,8 @@ Código: *${roleCode}*`,
       const urlMatch = body.match(/(https?:\/\/[^\s]+)/g);
       if (urlMatch && urlMatch.length > 0) {
         // Processa apenas o primeiro link encontrado
-        try {
-          await handleAutoDownload(nazu, from, urlMatch[0], info);
-        } catch (e) {
-          console.error('Erro no autodl:', e);
-        }
+        handleAutoDownload(nazu, from, urlMatch[0], info)
+          .catch(e => console.error('Erro no autodl:', e));
       }
     }
     if (isGroup && groupData.autoSticker && !info.key.fromMe) {
@@ -3428,17 +3428,22 @@ Código: *${roleCode}*`,
           if (isVideo && mediaVideo.seconds > 9.9) {
             return;
           }
-          const buffer = await getFileBuffer(isVideo ? mediaVideo : mediaImage, isVideo ? 'video' : 'image');
-          const shouldForceSquare = global.autoStickerMode === 'square';
-          await sendSticker(nazu, from, {
-            sticker: buffer,
-            author: `『${pushname}』\n『${nomebot}』\n『${nomedono}』\n『cognima.com.br』`,
-            packname: '👤 Usuario(a)ᮀ۟❁’￫\n🤖 Botᮀ۟❁’￫\n👑 Donoᮀ۟❁’￫\n🌐 Siteᮀ۟❁’￫',
-            type: isVideo ? 'video' : 'image',
-            forceSquare: shouldForceSquare
-          }, {
-            quoted: info
-          });
+          getFileBuffer(isVideo ? mediaVideo : mediaImage, isVideo ? 'video' : 'image')
+            .then(buffer => {
+              const shouldForceSquare = global.autoStickerMode === 'square';
+              return sendSticker(nazu, from, {
+                sticker: buffer,
+                author: `『${pushname}』\n『${nomebot}』\n『${nomedono}』\n『cognima.com.br』`,
+                packname: '👤 Usuario(a)ᮀ۟❁’￫\n🤖 Botᮀ۟❁’￫\n👑 Donoᮀ۟❁’￫\n🌐 Siteᮀ۟❁’￫',
+                type: isVideo ? 'video' : 'image',
+                forceSquare: shouldForceSquare
+              }, {
+                quoted: info
+              });
+            })
+            .catch(e => {
+              console.error("Erro ao converter mídia em figurinha automática:", e);
+            });
         }
       } catch (e) {
         console.error("Erro ao converter mídia em figurinha automática:", e);
@@ -3522,120 +3527,139 @@ Código: *${roleCode}*`,
       if (!isUserWhitelisted(sender, 'antilinkgp')) {
         let foundGroupLink = false;
         let link_dgp = null;
-        try {
-          if (budy2.includes('chat.whatsapp.com')) {
-            foundGroupLink = true;
-            link_dgp = await nazu.groupInviteCode(from);
-            if (budy2.includes(link_dgp)) foundGroupLink = false;
-          }
-          if (!foundGroupLink && info.message?.requestPaymentMessage) {
-            const paymentText = info.message.requestPaymentMessage?.noteMessage?.extendedTextMessage?.text || '';
-            if (paymentText.includes('chat.whatsapp.com')) {
+        const getInviteCode = () => {
+          if (link_dgp) return Promise.resolve(link_dgp);
+          return nazu.groupInviteCode(from).then(code => {
+            link_dgp = code;
+            return code;
+          });
+        };
+
+        Promise.resolve()
+          .then(() => {
+            if (budy2.includes('chat.whatsapp.com')) {
               foundGroupLink = true;
-              link_dgp = link_dgp || await nazu.groupInviteCode(from);
-              if (paymentText.includes(link_dgp)) foundGroupLink = false;
-            }
-          }
-          if (foundGroupLink) {
-            if (isOwner) return;
-            if (!AllgroupMembers.includes(sender)) return;
-            if (isBotAdmin) {
-              await nazu.groupParticipantsUpdate(from, [sender], 'remove');
-              await nazu.sendMessage(from, {
-                delete: {
-                  remoteJid: from,
-                  fromMe: false,
-                  id: info.key.id,
-                  participant: sender
-                }
-              });
-              await reply(`🔗 @${getUserName(sender)}, links de outros grupos não são permitidos. Você foi removido do grupo.`, {
-                mentions: [sender]
-              });
-            } else {
-              await nazu.sendMessage(from, {
-                delete: {
-                  remoteJid: from,
-                  fromMe: false,
-                  id: info.key.id,
-                  participant: sender
-                }
-              });
-              await reply(`🔗 Atenção, @${getUserName(sender)}! Links de outros grupos não são permitidos. Não consigo remover você, mas evite compartilhar esses links.`, {
-                mentions: [sender]
+              return getInviteCode().then(code => {
+                if (budy2.includes(code)) foundGroupLink = false;
               });
             }
-            return;
-          }
-        } catch (error) {
-          console.error("Erro no sistema antilink de grupos:", error);
-        }
+          })
+          .then(() => {
+            if (!foundGroupLink && info.message?.requestPaymentMessage) {
+              const paymentText = info.message.requestPaymentMessage?.noteMessage?.extendedTextMessage?.text || '';
+              if (paymentText.includes('chat.whatsapp.com')) {
+                foundGroupLink = true;
+                return getInviteCode().then(code => {
+                  if (paymentText.includes(code)) foundGroupLink = false;
+                });
+              }
+            }
+          })
+          .then(() => {
+            if (foundGroupLink) {
+              if (isOwner) return;
+              if (!AllgroupMembers.includes(sender)) return;
+              if (isBotAdmin) {
+                return nazu.groupParticipantsUpdate(from, [sender], 'remove')
+                  .then(() => nazu.sendMessage(from, {
+                    delete: {
+                      remoteJid: from,
+                      fromMe: false,
+                      id: info.key.id,
+                      participant: sender
+                    }
+                  }))
+                  .then(() => reply(`🔗 @${getUserName(sender)}, links de outros grupos não são permitidos. Você foi removido do grupo.`, {
+                    mentions: [sender]
+                  }));
+              } else {
+                return nazu.sendMessage(from, {
+                  delete: {
+                    remoteJid: from,
+                    fromMe: false,
+                    id: info.key.id,
+                    participant: sender
+                  }
+                })
+                  .then(() => reply(`🔗 Atenção, @${getUserName(sender)}! Links de outros grupos não são permitidos. Não consigo remover você, mas evite compartilhar esses links.`, {
+                    mentions: [sender]
+                  }));
+              }
+            }
+          })
+          .catch(error => {
+            console.error("Erro no sistema antilink de grupos:", error);
+          });
+        return;
       }
     }
     if (isGroup && isAntiLinkCanal && !isGroupAdmin && !isParceiro) {
       if (!isUserWhitelisted(sender, 'antilinkcanal')) {
         let foundChannelLink = false;
-        try {
-          if (budy2.includes('whatsapp.com/channel/')) {
-            foundChannelLink = true;
-          }
-          if (!foundChannelLink && info.message?.requestPaymentMessage) {
-            const paymentText = info.message.requestPaymentMessage?.noteMessage?.extendedTextMessage?.text || '';
-            if (paymentText.includes('whatsapp.com/channel/')) {
+        Promise.resolve()
+          .then(() => {
+            if (budy2.includes('whatsapp.com/channel/')) {
               foundChannelLink = true;
             }
-          }
-          if (foundChannelLink) {
-            if (isOwner) return;
-            if (!AllgroupMembers.includes(sender)) return;
-            if (isBotAdmin) {
-              await nazu.groupParticipantsUpdate(from, [sender], 'remove');
-              await nazu.sendMessage(from, {
-                delete: {
-                  remoteJid: from,
-                  fromMe: false,
-                  id: info.key.id,
-                  participant: sender
-                }
-              });
-              await reply(`📢 @${getUserName(sender)}, links de canais não são permitidos. Você foi removido do grupo.`, {
-                mentions: [sender]
-              });
-            } else {
-              await nazu.sendMessage(from, {
-                delete: {
-                  remoteJid: from,
-                  fromMe: false,
-                  id: info.key.id,
-                  participant: sender
-                }
-              });
-              await reply(`📢 Atenção, @${getUserName(sender)}! Links de canais não são permitidos. Não consigo remover você, mas evite compartilhar esses links.`, {
-                mentions: [sender]
-              });
+            if (!foundChannelLink && info.message?.requestPaymentMessage) {
+              const paymentText = info.message.requestPaymentMessage?.noteMessage?.extendedTextMessage?.text || '';
+              if (paymentText.includes('whatsapp.com/channel/')) {
+                foundChannelLink = true;
+              }
             }
-            return;
-          }
-        } catch (error) {
-          console.error("Erro no sistema antilink de canais:", error);
-        }
+          })
+          .then(() => {
+            if (foundChannelLink) {
+              if (isOwner) return;
+              if (!AllgroupMembers.includes(sender)) return;
+              if (isBotAdmin) {
+                return nazu.groupParticipantsUpdate(from, [sender], 'remove')
+                  .then(() => nazu.sendMessage(from, {
+                    delete: {
+                      remoteJid: from,
+                      fromMe: false,
+                      id: info.key.id,
+                      participant: sender
+                    }
+                  }))
+                  .then(() => reply(`📢 @${getUserName(sender)}, links de canais não são permitidos. Você foi removido do grupo.`, {
+                    mentions: [sender]
+                  }));
+              } else {
+                return nazu.sendMessage(from, {
+                  delete: {
+                    remoteJid: from,
+                    fromMe: false,
+                    id: info.key.id,
+                    participant: sender
+                  }
+                })
+                  .then(() => reply(`📢 Atenção, @${getUserName(sender)}! Links de canais não são permitidos. Não consigo remover você, mas evite compartilhar esses links.`, {
+                    mentions: [sender]
+                  }));
+              }
+            }
+          })
+          .catch(error => {
+            console.error("Erro no sistema antilink de canais:", error);
+          });
+        return;
       }
     }
     if (isGroup && isAntiLinkSoft && !isGroupAdmin && !isParceiro && budy2.includes('http') && !isOwner) {
       if (!isUserWhitelisted(sender, 'antilinksoft')) {
-        try {
-          await nazu.sendMessage(from, {
-            delete: {
-              remoteJid: from,
-              fromMe: false,
-              id: info.key.id,
-              participant: sender
-            }
+        nazu.sendMessage(from, {
+          delete: {
+            remoteJid: from,
+            fromMe: false,
+            id: info.key.id,
+            participant: sender
+          }
+        })
+          .catch(error => {
+            console.error("Erro no sistema antilinksoft:", error);
           });
-          return;
-        } catch (error) {
-          console.error("Erro no sistema antilinksoft:", error);
-        }
+        return;
       }
     }
     // AntiLink Hard - Remove qualquer link compartilhado
@@ -3644,37 +3668,39 @@ Código: *${roleCode}*`,
       const hasLink = linkRegex.test(budy2);
       
       if (hasLink && !isUserWhitelisted(sender, 'antilinkhard')) {
-        try {
-          if (isBotAdmin) {
-            await nazu.groupParticipantsUpdate(from, [sender], 'remove');
-            await nazu.sendMessage(from, {
-              delete: {
-                remoteJid: from,
-                fromMe: false,
-                id: info.key.id,
-                participant: sender
-              }
-            });
-            await reply(`🔗 @${getUserName(sender)}, links não são permitidos. Você foi removido do grupo.`, {
-              mentions: [sender]
-            });
-          } else {
-            await nazu.sendMessage(from, {
-              delete: {
-                remoteJid: from,
-                fromMe: false,
-                id: info.key.id,
-                participant: sender
-              }
-            });
-            await reply(`🔗 Atenção, @${getUserName(sender)}! Links não são permitidos. Não consigo remover você, mas evite enviar links.`, {
-              mentions: [sender]
-            });
-          }
-          return;
-        } catch (error) {
-          console.error("Erro no sistema antilink hard:", error);
-        }
+        Promise.resolve()
+          .then(() => {
+            if (isBotAdmin) {
+              return nazu.groupParticipantsUpdate(from, [sender], 'remove')
+                .then(() => nazu.sendMessage(from, {
+                  delete: {
+                    remoteJid: from,
+                    fromMe: false,
+                    id: info.key.id,
+                    participant: sender
+                  }
+                }))
+                .then(() => reply(`🔗 @${getUserName(sender)}, links não são permitidos. Você foi removido do grupo.`, {
+                  mentions: [sender]
+                }));
+            } else {
+              return nazu.sendMessage(from, {
+                delete: {
+                  remoteJid: from,
+                  fromMe: false,
+                  id: info.key.id,
+                  participant: sender
+                }
+              })
+                .then(() => reply(`🔗 Atenção, @${getUserName(sender)}! Links não são permitidos. Não consigo remover você, mas evite enviar links.`, {
+                  mentions: [sender]
+                }));
+            }
+          })
+          .catch(error => {
+            console.error("Erro no sistema antilink hard:", error);
+          });
+        return;
       }
     }
   const botStateFile = pathz.join(DATABASE_DIR, 'botState.json');
@@ -3713,29 +3739,22 @@ Código: *${roleCode}*`,
           try {
             if (relationshipManager.hasPendingRequest(from) && body) {
               const relResponse = relationshipManager.processResponse(from, sender, body);
-              if (relResponse) {
-                // Apenas envia mensagem se for sucesso, ignora respostas inválidas
-                if (relResponse.success && relResponse.message) {
-                  await nazu.sendMessage(from, {
-                    text: relResponse.message,
-                    mentions: relResponse.mentions || []
-                  });
-                }
+              if (relResponse && relResponse.success && relResponse.message) {
+                nazu.sendMessage(from, {
+                  text: relResponse.message,
+                  mentions: relResponse.mentions || []
+                }).catch(err => console.warn('[RELATIONSHIP] Error sending response:', err.message));
               }
             }
 
-            // Processa resposta de traição
             if (relationshipManager.hasPendingBetrayal && relationshipManager.processBetrayalResponse) {
               if (relationshipManager.hasPendingBetrayal(from) && body) {
                 const betrayalResponse = relationshipManager.processBetrayalResponse(from, sender, body, groupPrefix);
-                if (betrayalResponse) {
-                  // Apenas envia mensagem se for sucesso, ignora respostas inválidas
-                  if (betrayalResponse.success && betrayalResponse.message) {
-                    await nazu.sendMessage(from, {
-                      text: betrayalResponse.message,
-                      mentions: betrayalResponse.mentions || []
-                    });
-                  }
+                if (betrayalResponse && betrayalResponse.success && betrayalResponse.message) {
+                  nazu.sendMessage(from, {
+                    text: betrayalResponse.message,
+                    mentions: betrayalResponse.mentions || []
+                  }).catch(err => console.warn('[RELATIONSHIP] Error sending betrayal response:', err.message));
                 }
               }
             }
@@ -3748,32 +3767,30 @@ Código: *${roleCode}*`,
           const normalizedResponse = budy2.toLowerCase().trim();
           const result = tictactoe.processInvitationResponse(from, sender, normalizedResponse);
           if (result.success) {
-            await nazu.sendMessage(from, {
+            nazu.sendMessage(from, {
               text: result.message,
               mentions: result.mentions || []
-            });
+            }).catch(err => console.error('[TICTACTOE] Erro ao responder convite:', err.message));
           }
         }
         if (tictactoe.hasActiveGame(from) && budy2) {
           if (['tttend', 'rv', 'fimjogo'].includes(budy2)) {
             if (!isGroupAdmin) {
-              await reply("⚠️ Apenas administradores podem encerrar um jogo da velha em andamento.");
-              return;
+              return reply("⚠️ Apenas administradores podem encerrar um jogo da velha em andamento.").then(() => {});
             }
             const result = tictactoe.endGame(from);
-            await reply(result.message);
-            return;
+            return reply(result.message);
           }
           const position = parseInt(budy2.trim());
           if (!isNaN(position)) {
             const result = tictactoe.makeMove(from, sender, position);
             if (result.success) {
-              await nazu.sendMessage(from, {
+              return nazu.sendMessage(from, {
                 text: result.message,
                 mentions: result.mentions || [sender]
-              });
+              }).catch(err => console.error('[TICTACTOE] Erro ao enviar jogada:', err.message));
             } else if (result.message) {
-              await reply(result.message);
+              return reply(result.message);
             }
           }
           return;
@@ -3784,32 +3801,30 @@ Código: *${roleCode}*`,
           const normalizedResponse = budy2.toLowerCase().trim();
           const result = connect4.processInvitationResponse(from, sender, normalizedResponse);
           if (result.success) {
-            await nazu.sendMessage(from, {
+            nazu.sendMessage(from, {
               text: result.message,
               mentions: result.mentions || []
-            });
+            }).catch(err => console.error('[CONNECT4] Erro ao responder convite:', err.message));
           }
         }
         if (connect4 && connect4.hasActiveGame && connect4.hasActiveGame(from) && budy2) {
           if (['c4end', 'fimc4'].includes(budy2.toLowerCase())) {
             if (!isGroupAdmin) {
-              await reply("⚠️ Apenas administradores podem encerrar um Connect4 em andamento.");
-              return;
+              return reply("⚠️ Apenas administradores podem encerrar um Connect4 em andamento.").then(() => {});
             }
             const result = connect4.endGame(from);
-            await reply(result.message);
-            return;
+            return reply(result.message);
           }
           const column = parseInt(budy2.trim());
           if (!isNaN(column) && column >= 1 && column <= 7) {
             const result = connect4.makeMove(from, sender, column);
             if (result.success) {
-              await nazu.sendMessage(from, {
+              return nazu.sendMessage(from, {
                 text: result.message,
                 mentions: result.mentions || [sender]
-              });
+              }).catch(err => console.error('[CONNECT4] Erro ao enviar jogada:', err.message));
             } else if (result.message) {
-              await reply(result.message);
+              return reply(result.message);
             }
             return;
           }
@@ -3817,7 +3832,6 @@ Código: *${roleCode}*`,
 
         // Processamento do antitoxic
         if (antitoxic && antitoxic.isEnabled && antitoxic.isEnabled(from) && body && ia && KeyCog) {
-          // Função wrapper para a IA do antitoxic
           const aiFunction = (prompt) => {
             return ia.makeCognimaRequest('qwen/qwen3-235b-a22b', prompt, null, KeyCog)
               .then(response => response?.data?.choices?.[0]?.message?.content || '');
@@ -3839,7 +3853,6 @@ Código: *${roleCode}*`,
                   mentions: [sender]
                 });
               }
-              // Para 'mute', precisaria implementar sistema de mute
             }
           }).catch(toxicErr => {
             console.warn('[ANTITOXIC] Error:', toxicErr.message);
@@ -3849,19 +3862,16 @@ Código: *${roleCode}*`,
         // Processamento do antipalavra (verifica blacklist de palavras)
         if (isGroup && antipalavra && body && !isCmd) {
           try {
-            // Verifica se o sistema está ativo no grupo
             if (!antipalavra.isActive(from)) {
               // Sistema desativado, não processa
             } else if (!isGroupAdmin) {
-              // Apenas verifica mensagens de não-admins
               const detectionResult = antipalavra.checkMessage(from, body);
               
               if (detectionResult && detectionResult.detected) {
                 console.log(`[ANTIPALAVRA] Palavra detectada: "${detectionResult.palavra}" de @${sender.split('@')[0]}`);
                 
-                // Verifica se o bot é admin antes de tentar remover
                 if (!isBotAdmin) {
-                  await nazu.sendMessage(from, {
+                  nazu.sendMessage(from, {
                     text: `⚠️ *ANTIPALAVRA - DETECÇÃO*\n\n` +
                           `👤 @${sender.split('@')[0]} usou uma palavra proibida!\n` +
                           `⚠️ Palavra: "${detectionResult.palavra}"\n\n` +
@@ -3871,30 +3881,27 @@ Código: *${roleCode}*`,
                   return;
                 }
                 
-                // Deleta a mensagem
-                await nazu.sendMessage(from, { delete: info.key }).catch(err => 
+                nazu.sendMessage(from, { delete: info.key }).catch(err => 
                   console.error('[ANTIPALAVRA] Erro ao deletar mensagem:', err.message)
-                );
+                )
+                  .then(() => nazu.groupParticipantsUpdate(from, [sender], 'remove').catch(err => 
+                    console.error('[ANTIPALAVRA] Erro ao remover usuário:', err.message)
+                  ))
+                  .then(() => {
+                    antipalavra.registerBan(from, sender, detectionResult.palavra);
+                    return nazu.sendMessage(from, {
+                      text: `🚫 *ANTIPALAVRA - BANIMENTO AUTOMÁTICO*\n\n` +
+                            `👤 Usuário: @${sender.split('@')[0]}\n` +
+                            `⚠️ Palavra detectada: "${detectionResult.palavra}"\n` +
+                            `🔨 Ação: Banimento automático\n\n` +
+                            `_O sistema antipalavra protege este grupo._`,
+                      mentions: [sender]
+                    }).catch(err => console.error('[ANTIPALAVRA] Erro ao enviar notificação:', err.message));
+                  })
+                  .then(() => {
+                    return;
+                  });
                 
-                // Remove o usuário do grupo
-                await nazu.groupParticipantsUpdate(from, [sender], 'remove').catch(err => 
-                  console.error('[ANTIPALAVRA] Erro ao remover usuário:', err.message)
-                );
-                
-                // Registra o banimento
-                antipalavra.registerBan(from, sender, detectionResult.palavra);
-                
-                // Envia notificação
-                await nazu.sendMessage(from, {
-                  text: `🚫 *ANTIPALAVRA - BANIMENTO AUTOMÁTICO*\n\n` +
-                        `👤 Usuário: @${sender.split('@')[0]}\n` +
-                        `⚠️ Palavra detectada: "${detectionResult.palavra}"\n` +
-                        `🔨 Ação: Banimento automático\n\n` +
-                        `_O sistema antipalavra protege este grupo._`,
-                  mentions: [sender]
-                }).catch(err => console.error('[ANTIPALAVRA] Erro ao enviar notificação:', err.message));
-                
-                // Para o processamento da mensagem
                 return;
               }
             }
@@ -3903,7 +3910,7 @@ Código: *${roleCode}*`,
           }
         }
       } catch (error) {
-
+        console.error("Erro geral em verificações de grupo:", error);
       }
     }
     if (isGroup && groupData.blockedUsers && (groupData.blockedUsers[sender] || groupData.blockedUsers[getUserName(sender)]) && isCmd) {
@@ -18145,7 +18152,6 @@ Exemplo: ${prefix}tradutor espanhol | Olá mundo! ✨`);
             return reply(`❌ *Comando inválido*\n\n⚠️ Erro interno ao processar comando.`);
           }
           
-          // Verificar API key
           if (!KeyCog) {
             notifyOwnerAboutApiKey(nazu, nmrdn, 'API key não configurada', `Consulta de ${consultaInfo.name}`);
             return reply(API_KEY_REQUIRED_MESSAGE);
@@ -18172,11 +18178,9 @@ Exemplo: ${prefix}tradutor espanhol | Olá mundo! ✨`);
             },
             timeout: 120000
           }).then(response => {
-            // Verificar se a resposta indica erro de limite
             if (response.data && response.data.success === false && response.data.error === "Acesso negado") {
               const errorData = response.data;
               if (errorData.required_limit && errorData.required_limit > 500) {
-                // Notificar dono sobre necessidade de plano ilimitado
                 const ownerMessage = `🚨 *ALERTA - PLANO INSUFICIENTE PARA CONSULTAS DE DADOS* 🚨
 
 ⚠️ *Problema detectado:*
@@ -18212,13 +18216,11 @@ As consultas de dados (CPF, Vizinhos, Proprietário, Empregos, Vacinas, Benefíc
           }).catch(apiError => {
             console.error(`Erro no comando ${consultaInfo.name}:`, apiError.message);
 
-            // Verificar se é erro de API key
             if (isApiKeyError(apiError)) {
               notifyOwnerAboutApiKey(nazu, nmrdn, apiError.response?.data?.message || apiError.message, `Consulta de ${consultaInfo.name}`);
               return reply(`❌ *Erro na API Key*\n\n⚠️ Problema com a API key da Cognima. O dono do bot foi notificado.\n\n💡 Tente novamente mais tarde ou entre em contato com o dono do bot.`);
             }
 
-            // Verificar se é erro de limite
             if (apiError.response?.data && apiError.response.data.success === false && apiError.response.data.error === "Acesso negado") {
               const errorData = apiError.response.data;
               if (errorData.required_limit && errorData.required_limit > 500) {
@@ -18245,7 +18247,6 @@ As consultas de dados estão disponíveis apenas no *plano ilimitado*.
               }
             }
 
-            // Erro genérico
             if (apiError.response?.status === 404 || (apiError.response?.data && !apiError.response.data.success)) {
               reply(`❌ *Resultado não encontrado*\n\n🔍 Não foi possível encontrar informações para o CPF consultado.\n\n💡 *Possíveis motivos:*\n• CPF não cadastrado na base de dados\n• Dados não disponíveis no momento\n\n🔄 Tente novamente mais tarde.`);
             } else {
@@ -18898,28 +18899,34 @@ As consultas de dados estão disponíveis apenas no *plano ilimitado*.
       case 'nickgenerator':
         try {
           if (!q) return reply(`🎮 *GERADOR DE NICK*\n\n📝 *Como usar:*\n• Digite o nick após o comando\n• Ex: ${prefix}nick nazuna`);
-          var datzn;
-          datzn = await styleText(q);
-          await reply(datzn.join('\n'));
+          styleText(q)
+            .then(datzn => reply(datzn.join('\n')))
+            .catch(e => {
+              console.error(e);
+              return reply("❌ Ocorreu um erro interno. Tente novamente em alguns minutos.");
+            });
         } catch (e) {
           console.error(e);
-          await reply("❌ Ocorreu um erro interno. Tente novamente em alguns minutos.");
+          reply("❌ Ocorreu um erro interno. Tente novamente em alguns minutos.");
         }
         break;
       case 'printsite':
       case 'ssweb':
         try {
           if (!q) return reply(`Cade o link?`);
-          await nazu.sendMessage(from, {
+          nazu.sendMessage(from, {
             image: {
               url: `https://image.thum.io/get/fullpage/${q}`
             }
           }, {
             quoted: info
+          }).catch(err => {
+            console.error(err);
+            return reply("❌ Ocorreu um erro interno. Tente novamente em alguns minutos.");
           });
         } catch (e) {
           console.error(e);
-          await reply("❌ Ocorreu um erro interno. Tente novamente em alguns minutos.");
+          reply("❌ Ocorreu um erro interno. Tente novamente em alguns minutos.");
         }
         break;
       case 'upload':
@@ -18928,25 +18935,32 @@ As consultas de dados estão disponíveis apenas no *plano ilimitado*.
       case 'gerarlink':
         try {
           if (!isQuotedImage && !isQuotedVideo && !isQuotedDocument && !isQuotedAudio) return reply(`Marque um video, uma foto, um audio ou um documento`);
-          var foto1 = isQuotedImage ? info.message.extendedTextMessage.contextInfo.quotedMessage.imageMessage : {};
-          var video1 = isQuotedVideo ? info.message.extendedTextMessage.contextInfo.quotedMessage.videoMessage : {};
-          var docc1 = isQuotedDocument ? info.message.extendedTextMessage.contextInfo.quotedMessage.documentMessage : {};
-          var audio1 = isQuotedAudio ? info.message.extendedTextMessage.contextInfo.quotedMessage.audioMessage : "";
-          let media = {};
-          if (isQuotedDocument) {
-            media = await getFileBuffer(docc1, "document");
-          } else if (isQuotedVideo) {
-            media = await getFileBuffer(video1, "video");
-          } else if (isQuotedImage) {
-            media = await getFileBuffer(foto1, "image");
-          } else if (isQuotedAudio) {
-            media = await getFileBuffer(audio1, "audio");
-          }
-          let linkz = await upload(media);
-          await reply(`${linkz}`);
+          const foto1 = isQuotedImage ? info.message.extendedTextMessage.contextInfo.quotedMessage.imageMessage : {};
+          const video1 = isQuotedVideo ? info.message.extendedTextMessage.contextInfo.quotedMessage.videoMessage : {};
+          const docc1 = isQuotedDocument ? info.message.extendedTextMessage.contextInfo.quotedMessage.documentMessage : {};
+          const audio1 = isQuotedAudio ? info.message.extendedTextMessage.contextInfo.quotedMessage.audioMessage : "";
+          Promise.resolve()
+            .then(() => {
+              if (isQuotedDocument) {
+                return getFileBuffer(docc1, "document");
+              } else if (isQuotedVideo) {
+                return getFileBuffer(video1, "video");
+              } else if (isQuotedImage) {
+                return getFileBuffer(foto1, "image");
+              } else if (isQuotedAudio) {
+                return getFileBuffer(audio1, "audio");
+              }
+              return {};
+            })
+            .then(media => upload(media))
+            .then(linkz => reply(`${linkz}`))
+            .catch(e => {
+              console.error(e);
+              return reply("❌ Ocorreu um erro interno. Tente novamente em alguns minutos.");
+            });
         } catch (e) {
           console.error(e);
-          await reply("❌ Ocorreu um erro interno. Tente novamente em alguns minutos.");
+          reply("❌ Ocorreu um erro interno. Tente novamente em alguns minutos.");
         }
         break;
       
@@ -18975,49 +18989,55 @@ As consultas de dados estão disponíveis apenas no *plano ilimitado*.
             domain = urlToCheck.replace(/^(https?:\/\/)?/, '').split('/')[0];
           }
           
-          await reply('🔍 Verificando segurança do link...');
-          
-          // Verificar domínio na API FishFish
-          const fishResponse = await axios.get(`https://api.fishfish.gg/v1/domains/${encodeURIComponent(domain)}`, {
-            timeout: 120000,
-            validateStatus: (status) => status < 500
-          });
-          
-          if (fishResponse.status === 404) {
-            // Domínio não encontrado na base de dados = provavelmente seguro
-            await reply(`✅ *Resultado da Verificação*\n\n🔗 *Link:* ${urlToCheck}\n🌐 *Domínio:* ${domain}\n\n📊 *Status:* Não encontrado na base de ameaças\n\n💚 *Análise:* Este domínio não está listado como malicioso na base de dados FishFish. Isso geralmente indica que é seguro, mas sempre tenha cuidado ao acessar links desconhecidos!\n\n⚠️ *Dica:* Mesmo links "seguros" podem ter conteúdo prejudicial. Navegue com cautela!`);
-          } else if (fishResponse.status === 200) {
-            const data = fishResponse.data;
-            const category = data.category || 'unknown';
-            const createdAt = data.created ? new Date(data.created).toLocaleDateString('pt-BR') : 'N/A';
-            
-            let statusEmoji = '⚠️';
-            let statusText = 'Suspeito';
-            let riskLevel = 'Médio';
-            
-            if (category === 'phishing') {
-              statusEmoji = '🚨';
-              statusText = 'PHISHING DETECTADO';
-              riskLevel = 'CRÍTICO';
-            } else if (category === 'malware') {
-              statusEmoji = '☠️';
-              statusText = 'MALWARE DETECTADO';
-              riskLevel = 'CRÍTICO';
-            } else if (category === 'safe') {
-              statusEmoji = '✅';
-              statusText = 'Seguro';
-              riskLevel = 'Baixo';
-            }
-            
-            let warningMsg = '';
-            if (category === 'phishing' || category === 'malware') {
-              warningMsg = '\n\n🚫 *NÃO ACESSE ESTE LINK!*\nEste domínio foi identificado como perigoso e pode roubar seus dados ou infectar seu dispositivo!';
-            }
-            
-            await reply(`${statusEmoji} *Resultado da Verificação*\n\n🔗 *Link:* ${urlToCheck}\n🌐 *Domínio:* ${domain}\n\n📊 *Status:* ${statusText}\n🏷️ *Categoria:* ${category}\n⚡ *Nível de Risco:* ${riskLevel}\n📅 *Registrado em:* ${createdAt}${warningMsg}\n\n🔒 *Verificado por:* FishFish Security API`);
-          } else {
-            await reply('❌ Erro ao verificar o link. Tente novamente mais tarde.');
-          }
+          reply('🔍 Verificando segurança do link...')
+            .then(() => axios.get(`https://api.fishfish.gg/v1/domains/${encodeURIComponent(domain)}`, {
+              timeout: 120000,
+              validateStatus: (status) => status < 500
+            }))
+            .then(fishResponse => {
+              if (fishResponse.status === 404) {
+                return reply(`✅ *Resultado da Verificação*\n\n🔗 *Link:* ${urlToCheck}\n🌐 *Domínio:* ${domain}\n\n📊 *Status:* Não encontrado na base de ameaças\n\n💚 *Análise:* Este domínio não está listado como malicioso na base de dados FishFish. Isso geralmente indica que é seguro, mas sempre tenha cuidado ao acessar links desconhecidos!\n\n⚠️ *Dica:* Mesmo links "seguros" podem ter conteúdo prejudicial. Navegue com cautela!`);
+              } else if (fishResponse.status === 200) {
+                const data = fishResponse.data;
+                const category = data.category || 'unknown';
+                const createdAt = data.created ? new Date(data.created).toLocaleDateString('pt-BR') : 'N/A';
+                
+                let statusEmoji = '⚠️';
+                let statusText = 'Suspeito';
+                let riskLevel = 'Médio';
+                
+                if (category === 'phishing') {
+                  statusEmoji = '🚨';
+                  statusText = 'PHISHING DETECTADO';
+                  riskLevel = 'CRÍTICO';
+                } else if (category === 'malware') {
+                  statusEmoji = '☠️';
+                  statusText = 'MALWARE DETECTADO';
+                  riskLevel = 'CRÍTICO';
+                } else if (category === 'safe') {
+                  statusEmoji = '✅';
+                  statusText = 'Seguro';
+                  riskLevel = 'Baixo';
+                }
+                
+                let warningMsg = '';
+                if (category === 'phishing' || category === 'malware') {
+                  warningMsg = '\n\n🚫 *NÃO ACESSE ESTE LINK!*\nEste domínio foi identificado como perigoso e pode roubar seus dados ou infectar seu dispositivo!';
+                }
+                
+                return reply(`${statusEmoji} *Resultado da Verificação*\n\n🔗 *Link:* ${urlToCheck}\n🌐 *Domínio:* ${domain}\n\n📊 *Status:* ${statusText}\n🏷️ *Categoria:* ${category}\n⚡ *Nível de Risco:* ${riskLevel}\n📅 *Registrado em:* ${createdAt}${warningMsg}\n\n🔒 *Verificado por:* FishFish Security API`);
+              }
+              return reply('❌ Erro ao verificar o link. Tente novamente mais tarde.');
+            })
+            .catch(e => {
+              console.error('Erro no comando verificar:', e);
+              
+              if (e.code === 'ECONNABORTED' || e.message?.includes('timeout')) {
+                return reply('⏰ Tempo esgotado! O servidor de verificação está demorando para responder.');
+              }
+              
+              return reply('❌ Ocorreu um erro ao verificar o link. Tente novamente.');
+            });
         } catch (e) {
           console.error('Erro no comando verificar:', e);
           
@@ -19119,7 +19139,7 @@ As consultas de dados estão disponíveis apenas no *plano ilimitado*.
             diffText = `${diffHours}h em relação ao Brasil`;
           }
           
-          await reply(`🕐 *Horário em ${location.charAt(0).toUpperCase() + location.slice(1)}*\n\n📅 ${formattedTime}\n\n🌍 *Fuso:* ${timezone}\n⏰ *Diferença:* ${diffText}`);
+          reply(`🕐 *Horário em ${location.charAt(0).toUpperCase() + location.slice(1)}*\n\n📅 ${formattedTime}\n\n🌍 *Fuso:* ${timezone}\n⏰ *Diferença:* ${diffText}`);
         } catch (e) {
           console.error('Erro no comando hora:', e);
           reply('❌ Ocorreu um erro ao consultar o horário. Tente novamente.');
@@ -19240,31 +19260,30 @@ case 'ytmp3':
 
     if (q.includes('youtube.com') || q.includes('youtu.be')) {
       videoUrl = q;
-      await reply('Aguarde um momentinho... ☀️');
+      reply('Aguarde um momentinho... ☀️');
 
       youtube.mp3(videoUrl, 128, KeyCog)
-        .then(async (dlRes) => {
-          if (!dlRes.ok)
+        .then((dlRes) => {
+          if (!dlRes.ok) {
             return nazu.sendMessage(from, { text: `❌ Erro ao baixar o áudio: ${dlRes.msg}` }, { quoted: info });
-
-          try {
-            await nazu.sendMessage(from, {
-              audio: dlRes.buffer,
-              mimetype: 'audio/mpeg'
-            }, { quoted: info });
-          } catch (audioError) {
-            if (String(audioError).includes("ENOSPC") || String(audioError).includes("size")) {
-              await nazu.sendMessage(from, { text: '📦 Arquivo muito grande para enviar como áudio, enviando como documento...' }, { quoted: info });
-              await nazu.sendMessage(from, {
-                document: dlRes.buffer,
-                fileName: `${dlRes.filename}`,
-                mimetype: 'audio/mpeg'
-              }, { quoted: info });
-            } else {
-              console.error('Erro ao enviar áudio (link direto):', audioError);
-              nazu.sendMessage(from, { text: '❌ Ocorreu um erro ao enviar o áudio.' }, { quoted: info });
-            }
           }
+
+          return nazu.sendMessage(from, {
+            audio: dlRes.buffer,
+            mimetype: 'audio/mpeg'
+          }, { quoted: info }).catch((audioError) => {
+            if (String(audioError).includes("ENOSPC") || String(audioError).includes("size")) {
+              return nazu.sendMessage(from, { text: '📦 Arquivo muito grande para enviar como áudio, enviando como documento...' }, { quoted: info })
+                .then(() => nazu.sendMessage(from, {
+                  document: dlRes.buffer,
+                  fileName: `${dlRes.filename}`,
+                  mimetype: 'audio/mpeg'
+                }, { quoted: info }))
+                .catch(err => console.error('Erro ao enviar documento (link direto):', err));
+            }
+            console.error('Erro ao enviar áudio (link direto):', audioError);
+            return nazu.sendMessage(from, { text: '❌ Ocorreu um erro ao enviar o áudio.' }, { quoted: info });
+          });
         })
         .catch((downloadError) => {
           console.error('Erro no download (link direto):', downloadError);
@@ -19287,7 +19306,7 @@ case 'ytmp3':
     }
 
     // Mensagem de pesquisa
-    await reply(`🔍 *Pesquisando no YouTube...*\n\n🎵 Música: *${q}*\n\n⏳ Aguarde um momento...`);
+    reply(`🔍 *Pesquisando no YouTube...*\n\n🎵 Música: *${q}*\n\n⏳ Aguarde um momento...`);
 
     // Usando .then em vez de await para a pesquisa do YouTube
     youtube.search(q, KeyCog)
@@ -19315,27 +19334,27 @@ case 'ytmp3':
           }, { quoted: info }).catch((sendErr) => console.error('Erro ao enviar mensagem de resultado (busca):', sendErr));
 
           youtube.mp3(videoUrl, 128, KeyCog)
-            .then(async (dlRes) => {
-              if (!dlRes.ok) return nazu.sendMessage(from, { text: `❌ Erro ao baixar o áudio: ${dlRes.msg}` }, { quoted: info });
-
-              try {
-                await nazu.sendMessage(from, {
-                  audio: dlRes.buffer,
-                  mimetype: 'audio/mpeg'
-                }, { quoted: info });
-              } catch (audioError) {
-                if (String(audioError).includes("ENOSPC") || String(audioError).includes("size")) {
-                  await nazu.sendMessage(from, { text: '📦 Arquivo muito grande para enviar como áudio, enviando como documento...' }, { quoted: info });
-                  await nazu.sendMessage(from, {
-                    document: dlRes.buffer,
-                    fileName: `${dlRes.filename}`,
-                    mimetype: 'audio/mpeg'
-                  }, { quoted: info });
-                } else {
-                  console.error('Erro ao enviar áudio (busca):', audioError);
-                  nazu.sendMessage(from, { text: '❌ Ocorreu um erro ao enviar o áudio.' }, { quoted: info });
-                }
+            .then((dlRes) => {
+              if (!dlRes.ok) {
+                return nazu.sendMessage(from, { text: `❌ Erro ao baixar o áudio: ${dlRes.msg}` }, { quoted: info });
               }
+
+              return nazu.sendMessage(from, {
+                audio: dlRes.buffer,
+                mimetype: 'audio/mpeg'
+              }, { quoted: info }).catch((audioError) => {
+                if (String(audioError).includes("ENOSPC") || String(audioError).includes("size")) {
+                  return nazu.sendMessage(from, { text: '📦 Arquivo muito grande para enviar como áudio, enviando como documento...' }, { quoted: info })
+                    .then(() => nazu.sendMessage(from, {
+                      document: dlRes.buffer,
+                      fileName: `${dlRes.filename}`,
+                      mimetype: 'audio/mpeg'
+                    }, { quoted: info }))
+                    .catch(err => console.error('Erro ao enviar documento (busca):', err));
+                }
+                console.error('Erro ao enviar áudio (busca):', audioError);
+                return nazu.sendMessage(from, { text: '❌ Ocorreu um erro ao enviar o áudio.' }, { quoted: info });
+              });
             })
             .catch((downloadError) => {
               console.error('Erro no download (busca):', downloadError);
@@ -19361,7 +19380,7 @@ case 'ytmp3':
     console.error('Erro no comando play/ytmp3 (bloco principal):', error);
 
     if (error.message?.includes('API key inválida')) {
-      await notifyOwnerAboutApiKey(nazu, nmrdn, error.message, "YouTube", prefix);
+      notifyOwnerAboutApiKey(nazu, nmrdn, error.message, "YouTube", prefix).catch(() => {});
       return reply('🤖 *Sistema de YouTube temporariamente indisponível*\n\n😅 Estou com problemas técnicos no momento. O administrador já foi notificado!\n\n⏰ Tente novamente em alguns minutos.');
     }
 
@@ -19395,7 +19414,7 @@ case 'spotify':
       return reply('❌ Por favor, envie um link válido do Spotify.\n\n💡 Dica: Use o comando play2 para buscar por nome!');
     }
 
-    await reply('🎵 Baixando do Spotify... Aguarde um momento!');
+    reply('🎵 Baixando do Spotify... Aguarde um momento!');
 
     // Usar rota de download da API Cognima
     axios.get('https://cog.api.br/api/v1/spotify/download', {
@@ -19404,7 +19423,7 @@ case 'spotify':
       responseType: 'arraybuffer',
       timeout: 120000
     })
-    .then(async (response) => {
+    .then((response) => {
       const audioBuffer = Buffer.from(response.data);
       
       // Extrair informações do track ID para mostrar nome
@@ -19413,31 +19432,25 @@ case 'spotify':
       
       const caption = `🎵 *Música Baixada do Spotify!* 🎵\n\n🔗 ${q}\n\n🎧 *Enviando áudio...*`;
 
-      try {
-        await reply(caption);
-      } catch (err) {
-        console.error('Erro ao enviar caption:', err);
-      }
+      reply(caption).catch(err => console.error('Erro ao enviar caption:', err));
 
-      try {
-        await nazu.sendMessage(from, {
-          audio: audioBuffer,
-          mimetype: 'audio/mpeg',
-          fileName: filename
-        }, { quoted: info });
-      } catch (audioError) {
+      return nazu.sendMessage(from, {
+        audio: audioBuffer,
+        mimetype: 'audio/mpeg',
+        fileName: filename
+      }, { quoted: info }).catch((audioError) => {
         if (String(audioError).includes("ENOSPC") || String(audioError).includes("size")) {
-          await reply('📦 Arquivo muito grande, enviando como documento...');
-          await nazu.sendMessage(from, {
-            document: audioBuffer,
-            fileName: filename,
-            mimetype: 'audio/mpeg'
-          }, { quoted: info });
-        } else {
-          console.error('Erro ao enviar áudio do Spotify:', audioError);
-          reply('❌ Ocorreu um erro ao enviar o áudio.');
+          return reply('📦 Arquivo muito grande, enviando como documento...')
+            .then(() => nazu.sendMessage(from, {
+              document: audioBuffer,
+              fileName: filename,
+              mimetype: 'audio/mpeg'
+            }, { quoted: info }))
+            .catch(err => console.error('Erro ao enviar documento do Spotify:', err));
         }
-      }
+        console.error('Erro ao enviar áudio do Spotify:', audioError);
+        return reply('❌ Ocorreu um erro ao enviar o áudio.');
+      });
     })
     .catch((error) => {
       console.error('Erro no download do Spotify:', error);
@@ -19477,7 +19490,7 @@ case 'playspotify':
       return reply(API_KEY_REQUIRED_MESSAGE);
     }
 
-    await reply('🔎 Buscando no Spotify... Aguarde!');
+    reply('🔎 Buscando no Spotify... Aguarde!');
 
     // 1. Primeiro buscar a música usando search-one
     axios.get('https://cog.api.br/api/v1/spotify/search-one', {
@@ -19485,7 +19498,7 @@ case 'playspotify':
       headers: { 'X-API-Key': KeyCog },
       timeout: 30000
     })
-    .then(async (searchResponse) => {
+    .then((searchResponse) => {
       const searchData = searchResponse.data;
       
       if (!searchData.success || !searchData.result) {
@@ -19502,48 +19515,45 @@ case 'playspotify':
         `🔗 *Link:* ${trackUrl}\n\n` +
         `📥 *Baixando...*`;
 
-      await reply(searchCaption);
+      return reply(searchCaption)
+        .catch(() => {}) // segue mesmo se falhar enviar texto
+        .then(() => axios.get('https://cog.api.br/api/v1/spotify/download', {
+          params: { url: trackUrl },
+          headers: { 'X-API-Key': KeyCog },
+          responseType: 'arraybuffer',
+          timeout: 120000
+        }))
+        .then((downloadResponse) => {
+          const audioBuffer = Buffer.from(downloadResponse.data);
+          const filename = `${track.name.replace(/[^\w\s]/gi, '_')}.mp3`;
 
-      // 2. Agora baixar a música usando o link encontrado
-      axios.get('https://cog.api.br/api/v1/spotify/download', {
-        params: { url: trackUrl },
-        headers: { 'X-API-Key': KeyCog },
-        responseType: 'arraybuffer',
-        timeout: 120000
-      })
-      .then(async (downloadResponse) => {
-        const audioBuffer = Buffer.from(downloadResponse.data);
-        const filename = `${track.name.replace(/[^\w\s]/gi, '_')}.mp3`;
-
-        try {
-          await nazu.sendMessage(from, {
+          return nazu.sendMessage(from, {
             audio: audioBuffer,
             mimetype: 'audio/mpeg',
             fileName: filename
-          }, { quoted: info });
-        } catch (audioError) {
-          if (String(audioError).includes("ENOSPC") || String(audioError).includes("size")) {
-            await reply('📦 Arquivo muito grande, enviando como documento...');
-            await nazu.sendMessage(from, {
-              document: audioBuffer,
-              fileName: filename,
-              mimetype: 'audio/mpeg'
-            }, { quoted: info });
-          } else {
+          }, { quoted: info }).catch((audioError) => {
+            if (String(audioError).includes("ENOSPC") || String(audioError).includes("size")) {
+              return reply('📦 Arquivo muito grande, enviando como documento...')
+                .then(() => nazu.sendMessage(from, {
+                  document: audioBuffer,
+                  fileName: filename,
+                  mimetype: 'audio/mpeg'
+                }, { quoted: info }))
+                .catch(err => console.error('Erro ao enviar documento do Spotify (play2):', err));
+            }
             console.error('Erro ao enviar áudio do Spotify:', audioError);
-            reply('❌ Ocorreu um erro ao enviar o áudio.');
+            return reply('❌ Ocorreu um erro ao enviar o áudio.');
+          });
+        })
+        .catch((downloadError) => {
+          console.error('Erro no download do Spotify:', downloadError);
+          if (downloadError.response?.status === 401 || downloadError.response?.status === 403) {
+            notifyOwnerAboutApiKey(nazu, nmrdn, 'API key inválida ou expirada', 'Spotify', prefix);
+            reply('🤖 *Sistema de Spotify temporariamente indisponível*');
+          } else {
+            reply(`❌ Erro ao baixar a música: ${downloadError.message || 'Erro desconhecido'}`);
           }
-        }
-      })
-      .catch((downloadError) => {
-        console.error('Erro no download do Spotify:', downloadError);
-        if (downloadError.response?.status === 401 || downloadError.response?.status === 403) {
-          notifyOwnerAboutApiKey(nazu, nmrdn, 'API key inválida ou expirada', 'Spotify', prefix);
-          reply('🤖 *Sistema de Spotify temporariamente indisponível*');
-        } else {
-          reply(`❌ Erro ao baixar a música: ${downloadError.message || 'Erro desconhecido'}`);
-        }
-      });
+        });
     })
     .catch((searchError) => {
       console.error('Erro na busca do Spotify:', searchError);
@@ -19586,10 +19596,10 @@ case 'soundcloud':
       return reply('❌ Por favor, envie um link válido do SoundCloud.\n\n💡 Dica: Use o comando play3 para buscar por nome!');
     }
 
-    await reply('🎵 Baixando do SoundCloud... Aguarde um momento!');
+    reply('🎵 Baixando do SoundCloud... Aguarde um momento!');
 
     soundcloud.download(q, KeyCog)
-      .then(async (result) => {
+      .then((result) => {
         if (!result.ok) {
           if (result.msg.includes('API key inválida')) {
             soundcloud.notifyOwnerAboutApiKey(nazu, numerodono, result.msg, command);
@@ -19603,34 +19613,28 @@ case 'soundcloud':
           `👤 *Artista:* ${result.artist}\n\n` +
           `🎧 *Enviando áudio...*`;
 
-        try {
-          await nazu.sendMessage(from, {
-            image: { url: result.thumbnail },
-            caption
-          }, { quoted: info });
-        } catch (imgErr) {
-          console.error('Erro ao enviar thumbnail do SoundCloud:', imgErr);
-        }
+        nazu.sendMessage(from, {
+          image: { url: result.thumbnail },
+          caption
+        }, { quoted: info }).catch((imgErr) => console.error('Erro ao enviar thumbnail do SoundCloud:', imgErr));
 
-        try {
-          await nazu.sendMessage(from, {
-            audio: result.buffer,
-            mimetype: 'audio/mpeg',
-            fileName: result.filename
-          }, { quoted: info });
-        } catch (audioError) {
+        return nazu.sendMessage(from, {
+          audio: result.buffer,
+          mimetype: 'audio/mpeg',
+          fileName: result.filename
+        }, { quoted: info }).catch((audioError) => {
           if (String(audioError).includes("ENOSPC") || String(audioError).includes("size")) {
-            await reply('📦 Arquivo muito grande, enviando como documento...');
-            await nazu.sendMessage(from, {
-              document: result.buffer,
-              fileName: result.filename,
-              mimetype: 'audio/mpeg'
-            }, { quoted: info });
-          } else {
-            console.error('Erro ao enviar áudio do SoundCloud:', audioError);
-            reply('❌ Ocorreu um erro ao enviar o áudio.');
+            return reply('📦 Arquivo muito grande, enviando como documento...')
+              .then(() => nazu.sendMessage(from, {
+                document: result.buffer,
+                fileName: result.filename,
+                mimetype: 'audio/mpeg'
+              }, { quoted: info }))
+              .catch(err => console.error('Erro ao enviar documento do SoundCloud:', err));
           }
-        }
+          console.error('Erro ao enviar áudio do SoundCloud:', audioError);
+          return reply('❌ Ocorreu um erro ao enviar o áudio.');
+        });
       })
       .catch((error) => {
         console.error('Erro no download do SoundCloud:', error);
@@ -19668,10 +19672,10 @@ case 'playsoundcloud':
       return reply(API_KEY_REQUIRED_MESSAGE);
     }
 
-    await reply('🔎 Buscando no SoundCloud... Aguarde!');
+    reply('🔎 Buscando no SoundCloud... Aguarde!');
 
     soundcloud.searchDownload(q, KeyCog)
-      .then(async (result) => {
+      .then((result) => {
         if (!result.ok) {
           if (result.msg.includes('API key inválida')) {
             soundcloud.notifyOwnerAboutApiKey(nazu, numerodono, result.msg, command);
@@ -19703,34 +19707,28 @@ case 'playsoundcloud':
           `🔗 *Link:* ${result.track.permalink_url}\n\n` +
           `🎧 *Baixando e processando...*`;
 
-        try {
-          await nazu.sendMessage(from, {
-            image: { url: result.thumbnail },
-            caption
-          }, { quoted: info });
-        } catch (imgErr) {
-          console.error('Erro ao enviar thumbnail do SoundCloud:', imgErr);
-        }
+        nazu.sendMessage(from, {
+          image: { url: result.thumbnail },
+          caption
+        }, { quoted: info }).catch((imgErr) => console.error('Erro ao enviar thumbnail do SoundCloud:', imgErr));
 
-        try {
-          await nazu.sendMessage(from, {
-            audio: result.buffer,
-            mimetype: 'audio/mpeg',
-            fileName: result.filename
-          }, { quoted: info });
-        } catch (audioError) {
+        return nazu.sendMessage(from, {
+          audio: result.buffer,
+          mimetype: 'audio/mpeg',
+          fileName: result.filename
+        }, { quoted: info }).catch((audioError) => {
           if (String(audioError).includes("ENOSPC") || String(audioError).includes("size")) {
-            await reply('📦 Arquivo muito grande, enviando como documento...');
-            await nazu.sendMessage(from, {
-              document: result.buffer,
-              fileName: result.filename,
-              mimetype: 'audio/mpeg'
-            }, { quoted: info });
-          } else {
-            console.error('Erro ao enviar áudio do SoundCloud:', audioError);
-            reply('❌ Ocorreu um erro ao enviar o áudio.');
+            return reply('📦 Arquivo muito grande, enviando como documento...')
+              .then(() => nazu.sendMessage(from, {
+                document: result.buffer,
+                fileName: result.filename,
+                mimetype: 'audio/mpeg'
+              }, { quoted: info }))
+              .catch(err => console.error('Erro ao enviar documento do SoundCloud (play3):', err));
           }
-        }
+          console.error('Erro ao enviar áudio do SoundCloud:', audioError);
+          return reply('❌ Ocorreu um erro ao enviar o áudio.');
+        });
       })
       .catch((error) => {
         console.error('Erro na busca/download do SoundCloud:', error);
@@ -19765,31 +19763,28 @@ case 'playsoundcloud':
             videoUrl = q;
             reply('Aguarde um momentinho... ☀️');
             youtube.mp4(videoUrl, 360, KeyCog)
-              .then(async (dlRes) => {
+              .then((dlRes) => {
                 if (!dlRes.ok) return reply(dlRes.msg);
 
-                try {
-                  await nazu.sendMessage(from, {
-                    video: dlRes.buffer,
-                    fileName: `${dlRes.filename}`,
-                    mimetype: 'video/mp4'
-                  }, {
-                    quoted: info
-                  });
-                } catch (videoError) {
+                return nazu.sendMessage(from, {
+                  video: dlRes.buffer,
+                  fileName: `${dlRes.filename}`,
+                  mimetype: 'video/mp4'
+                }, {
+                  quoted: info
+                }).catch((videoError) => {
                   if (String(videoError).includes("ENOSPC") || String(videoError).includes("size")) {
-                    await reply('Arquivo muito grande, enviando como documento...');
-                    await nazu.sendMessage(from, {
-                      document: dlRes.buffer,
-                      fileName: `${dlRes.filename}`,
-                      mimetype: 'video/mp4'
-                    }, {
-                      quoted: info
-                    });
-                  } else {
-                    throw videoError;
+                    return reply('Arquivo muito grande, enviando como documento...')
+                      .then(() => nazu.sendMessage(from, {
+                        document: dlRes.buffer,
+                        fileName: `${dlRes.filename}`,
+                        mimetype: 'video/mp4'
+                      }, { quoted: info }))
+                      .catch(err => console.error('Erro ao enviar documento (playvid direto):', err));
                   }
-                }
+                  console.error('Erro ao enviar vídeo (playvid direto):', videoError);
+                  return reply('❌ Ocorreu um erro ao enviar o vídeo.');
+                });
               })
               .catch((e) => {
                 console.error('Erro ao baixar/enviar vídeo direto (promise):', e);
@@ -19817,27 +19812,26 @@ case 'playsoundcloud':
 
                 return youtube.mp4(videoUrl, 360, KeyCog);
               })
-              .then(async (dlRes) => {
+              .then((dlRes) => {
                 if (!dlRes.ok) return reply(dlRes.msg);
 
-                try {
-                  await nazu.sendMessage(from, {
-                    video: dlRes.buffer,
-                    fileName: `${dlRes.filename}`,
-                    mimetype: 'video/mp4'
-                  }, { quoted: info });
-                } catch (videoError) {
+                return nazu.sendMessage(from, {
+                  video: dlRes.buffer,
+                  fileName: `${dlRes.filename}`,
+                  mimetype: 'video/mp4'
+                }, { quoted: info }).catch((videoError) => {
                   if (String(videoError).includes("ENOSPC") || String(videoError).includes("size")) {
-                    await reply('Arquivo muito grande, enviando como documento...');
-                    await nazu.sendMessage(from, {
-                      document: dlRes.buffer,
-                      fileName: `${dlRes.filename}`,
-                      mimetype: 'video/mp4'
-                    }, { quoted: info });
-                  } else {
-                    throw videoError;
+                    return reply('Arquivo muito grande, enviando como documento...')
+                      .then(() => nazu.sendMessage(from, {
+                        document: dlRes.buffer,
+                        fileName: `${dlRes.filename}`,
+                        mimetype: 'video/mp4'
+                      }, { quoted: info }))
+                      .catch(err => console.error('Erro ao enviar documento (playvid busca):', err));
                   }
-                }
+                  console.error('Erro ao enviar vídeo (playvid busca):', videoError);
+                  return reply('❌ Ocorreu um erro ao enviar o vídeo.');
+                });
               })
               .catch((e) => {
                 console.error('Erro no download/playvid:', e);
@@ -19857,7 +19851,7 @@ case 'playsoundcloud':
           
           // Verificar se é erro de API key e notificar o dono
           if (e.message && e.message.includes('API key inválida')) {
-            await notifyOwnerAboutApiKey(nazu, nmrdn, e.message, "YouTube", prefix);
+            notifyOwnerAboutApiKey(nazu, nmrdn, e.message, "YouTube", prefix).catch(() => {});
             return reply('🤖 *Sistema de YouTube temporariamente indisponível*\n\n😅 Estou com problemas técnicos no momento. O administrador já foi notificado!\n\n⏰ Tente novamente em alguns minutos.');
           }
           
@@ -19868,8 +19862,13 @@ case 'playsoundcloud':
       case 'lyrics':
         try {
           if (!q) return reply('cade o nome da musica?');
-          await reply('Aguarde um momentinho... ☀️');
-          await reply(await Lyrics(q));
+          reply('Aguarde um momentinho... ☀️');
+          Promise.resolve(Lyrics(q))
+            .then((text) => reply(text))
+            .catch((lyricErr) => {
+              console.error('Erro ao obter lyrics:', lyricErr);
+              reply("ocorreu um erro 💔");
+            });
         } catch (e) {
           console.error(e);
           reply("ocorreu um erro 💔");
@@ -20218,45 +20217,43 @@ case 'getallmedia':
           const tiktokPromise = isTikTokUrl ? tiktok.dl(q, KeyCog) : tiktok.search(q, KeyCog);
 
           tiktokPromise
-            .then(async (datinha) => {
+            .then((datinha) => {
               if (!datinha.ok) return reply(datinha.msg);
 
-              for (const urlz of datinha.urls) {
-                await nazu.sendMessage(from, {
-                  [datinha.type]: {
-                    url: urlz
-                  }
-                }, {
-                  quoted: info
-                });
-              }
+              const sendAll = datinha.urls.reduce((promiseChain, urlz) => {
+                return promiseChain.then(() => nazu.sendMessage(from, {
+                  [datinha.type]: { url: urlz }
+                }, { quoted: info }));
+              }, Promise.resolve());
 
-              if (datinha.audio) await nazu.sendMessage(from, {
-                audio: {
-                  url: datinha.audio
-                },
-                mimetype: 'audio/mp4'
-              }, {
-                quoted: info
+              return sendAll.then(() => {
+                if (datinha.audio) {
+                  return nazu.sendMessage(from, {
+                    audio: { url: datinha.audio },
+                    mimetype: 'audio/mp4'
+                  }, { quoted: info });
+                }
+              }).catch((sendErr) => {
+                console.error('Erro ao enviar mídia do TikTok:', sendErr);
+                reply('❌ Ocorreu um erro ao enviar a mídia do TikTok.');
               });
             })
-            .catch(async (e) => {
+            .catch((e) => {
               console.error('Erro no comando TikTok (promise):', e);
               if (e.message && e.message.includes('API key inválida')) {
-                await notifyOwnerAboutApiKey(nazu, nmrdn, e.message, "TikTok", prefix);
+                notifyOwnerAboutApiKey(nazu, nmrdn, e.message, "TikTok", prefix).catch(() => {});
                 return reply('🤖 *Sistema de TikTok temporariamente indisponível*\n\n😅 Estou com problemas técnicos no momento. O administrador já foi notificado!\n\n⏰ Tente novamente em alguns minutos.');
               }
 
               reply("❌ Ocorreu um erro ao processar sua solicitação. Por favor, tente novamente mais tarde.");
             });
-
           return;
         } catch (e) {
           console.error('Erro no comando TikTok:', e);
           
           // Verificar se é erro de API key e notificar o dono
           if (e.message && e.message.includes('API key inválida')) {
-            await notifyOwnerAboutApiKey(nazu, nmrdn, e.message, "TikTok", prefix);
+            notifyOwnerAboutApiKey(nazu, nmrdn, e.message, "TikTok", prefix).catch(() => {});
             return reply('🤖 *Sistema de TikTok temporariamente indisponível*\n\n😅 Estou com problemas técnicos no momento. O administrador já foi notificado!\n\n⏰ Tente novamente em alguns minutos.');
           }
           
@@ -20289,10 +20286,10 @@ case 'facebookdl':
       return reply('❌ Por favor, envie um link válido do Facebook.');
     }
 
-    await reply('📹 Baixando vídeo do Facebook em HD... Aguarde!');
+    reply('📹 Baixando vídeo do Facebook em HD... Aguarde!');
 
     facebook.downloadHD(q, KeyCog)
-      .then(async (result) => {
+      .then((result) => {
         if (!result.ok) {
           if (result.msg.includes('API key inválida')) {
             facebook.notifyOwnerAboutApiKey(nazu, numerodono, result.msg, command);
@@ -20310,34 +20307,28 @@ case 'facebookdl':
           (result.allQualities.length > 0 ? `\n🎬 *Qualidades disponíveis:*\n${qualityList}\n` : '') +
           `\n📥 *Enviando vídeo...*`;
 
-        try {
-          await nazu.sendMessage(from, {
-            image: { url: result.thumbnail },
-            caption
-          }, { quoted: info });
-        } catch (imgErr) {
-          console.error('Erro ao enviar thumbnail do Facebook:', imgErr);
-        }
+        nazu.sendMessage(from, {
+          image: { url: result.thumbnail },
+          caption
+        }, { quoted: info }).catch((imgErr) => console.error('Erro ao enviar thumbnail do Facebook:', imgErr));
 
-        try {
-          await nazu.sendMessage(from, {
-            video: result.buffer,
-            mimetype: 'video/mp4',
-            fileName: result.filename
-          }, { quoted: info });
-        } catch (videoError) {
+        return nazu.sendMessage(from, {
+          video: result.buffer,
+          mimetype: 'video/mp4',
+          fileName: result.filename
+        }, { quoted: info }).catch((videoError) => {
           if (String(videoError).includes("ENOSPC") || String(videoError).includes("size")) {
-            await reply('📦 Vídeo muito grande, enviando como documento...');
-            await nazu.sendMessage(from, {
-              document: result.buffer,
-              fileName: result.filename,
-              mimetype: 'video/mp4'
-            }, { quoted: info });
-          } else {
-            console.error('Erro ao enviar vídeo do Facebook:', videoError);
-            reply('❌ Ocorreu um erro ao enviar o vídeo.');
+            return reply('📦 Vídeo muito grande, enviando como documento...')
+              .then(() => nazu.sendMessage(from, {
+                document: result.buffer,
+                fileName: result.filename,
+                mimetype: 'video/mp4'
+              }, { quoted: info }))
+              .catch(err => console.error('Erro ao enviar documento do Facebook:', err));
           }
-        }
+          console.error('Erro ao enviar vídeo do Facebook:', videoError);
+          return reply('❌ Ocorreu um erro ao enviar o vídeo.');
+        });
       })
       .catch((error) => {
         console.error('Erro no download do Facebook:', error);
@@ -20378,10 +20369,10 @@ case 'vimeodl':
       return reply('❌ Por favor, envie um link válido do Vimeo.');
     }
 
-    await reply('🎬 Baixando vídeo do Vimeo... Aguarde!');
+    reply('🎬 Baixando vídeo do Vimeo... Aguarde!');
 
     vimeo.download(q, KeyCog)
-      .then(async (result) => {
+      .then((result) => {
         if (!result.ok) {
           if (result.msg.includes('API key inválida')) {
             vimeo.notifyOwnerAboutApiKey(nazu, numerodono, result.msg, command);
@@ -20412,34 +20403,28 @@ case 'vimeodl':
           (result.description ? `\n📝 *Descrição:* ${result.description.slice(0, 100)}${result.description.length > 100 ? '...' : ''}\n` : '') +
           `\n📥 *Enviando vídeo...*`;
 
-        try {
-          await nazu.sendMessage(from, {
-            image: { url: result.thumbnail },
-            caption
-          }, { quoted: info });
-        } catch (imgErr) {
-          console.error('Erro ao enviar thumbnail do Vimeo:', imgErr);
-        }
+        nazu.sendMessage(from, {
+          image: { url: result.thumbnail },
+          caption
+        }, { quoted: info }).catch((imgErr) => console.error('Erro ao enviar thumbnail do Vimeo:', imgErr));
 
-        try {
-          await nazu.sendMessage(from, {
-            video: result.buffer,
-            mimetype: 'video/mp4',
-            fileName: result.filename
-          }, { quoted: info });
-        } catch (videoError) {
+        return nazu.sendMessage(from, {
+          video: result.buffer,
+          mimetype: 'video/mp4',
+          fileName: result.filename
+        }, { quoted: info }).catch((videoError) => {
           if (String(videoError).includes("ENOSPC") || String(videoError).includes("size")) {
-            await reply('📦 Vídeo muito grande, enviando como documento...');
-            await nazu.sendMessage(from, {
-              document: result.buffer,
-              fileName: result.filename,
-              mimetype: 'video/mp4'
-            }, { quoted: info });
-          } else {
-            console.error('Erro ao enviar vídeo do Vimeo:', videoError);
-            reply('❌ Ocorreu um erro ao enviar o vídeo.');
+            return reply('📦 Vídeo muito grande, enviando como documento...')
+              .then(() => nazu.sendMessage(from, {
+                document: result.buffer,
+                fileName: result.filename,
+                mimetype: 'video/mp4'
+              }, { quoted: info }))
+              .catch(err => console.error('Erro ao enviar documento do Vimeo:', err));
           }
-        }
+          console.error('Erro ao enviar vídeo do Vimeo:', videoError);
+          return reply('❌ Ocorreu um erro ao enviar o vídeo.');
+        });
       })
       .catch((error) => {
         console.error('Erro no download do Vimeo:', error);
@@ -20488,103 +20473,109 @@ case 'twitchdl':
       return num.toString();
     };
 
-    twitch.download(q, KeyCog).then(result => {
-      if (!result.ok) {
-        return reply(result.message || '❌ Erro ao baixar o vídeo do Twitch.');
-      }
+    twitch.download(q, KeyCog)
+      .then((result) => {
+        if (!result.ok) {
+          return reply(result.message || '❌ Erro ao baixar o vídeo do Twitch.');
+        }
 
-      const {
-        title,
-        streamer,
-        thumbnail,
-        duration,
-        views,
-        game,
-        type,
-        timestamp,
-        buffer,
-        filename
-      } = result;
+        const {
+          title,
+          streamer,
+          thumbnail,
+          duration,
+          views,
+          game,
+          type,
+          timestamp,
+          buffer,
+          filename
+        } = result;
 
-      // Preparar a mensagem com informações do vídeo
-      let caption = `╭━━━⊱🎮 TWITCH ${type === 'clip' ? 'CLIP' : 'VOD'} ⊱━━━╮\n\n`;
-      caption += `📺 *Título:* ${title}\n`;
-      caption += `👤 *Streamer:* ${streamer}\n`;
-      
-      if (duration) {
-        caption += `⏱️ *Duração:* ${formatDuration(duration)}\n`;
-      }
-      
-      if (views) {
-        caption += `👁️ *Visualizações:* ${formatNumber(views)}\n`;
-      }
-      
-      if (game) {
-        caption += `🎮 *Jogo:* ${game}\n`;
-      }
-      
-      if (timestamp) {
-        const date = new Date(timestamp);
-        caption += `📅 *Data:* ${date.toLocaleDateString('pt-BR')}\n`;
-      }
-      
-      caption += `\n╰━━━━━━━━━━━━━━━━━━━╯`;
+        let caption = `╭━━━⊱🎮 TWITCH ${type === 'clip' ? 'CLIP' : 'VOD'} ⊱━━━╮\n\n`;
+        caption += `📺 *Título:* ${title}\n`;
+        caption += `👤 *Streamer:* ${streamer}\n`;
+        
+        if (duration) {
+          caption += `⏱️ *Duração:* ${formatDuration(duration)}\n`;
+        }
+        
+        if (views) {
+          caption += `👁️ *Visualizações:* ${formatNumber(views)}\n`;
+        }
+        
+        if (game) {
+          caption += `🎮 *Jogo:* ${game}\n`;
+        }
+        
+        if (timestamp) {
+          const date = new Date(timestamp);
+          caption += `📅 *Data:* ${date.toLocaleDateString('pt-BR')}\n`;
+        }
+        
+        caption += `\n╰━━━━━━━━━━━━━━━━━━━╯`;
 
-      // Enviar thumbnail primeiro
-      if (thumbnail) {
-        nazu.sendMessage(from, {
-          image: { url: thumbnail },
-          caption: caption
-        }).catch(err => {
-          console.error('Erro ao enviar thumbnail do Twitch:', err);
-        });
-      }
+        if (thumbnail) {
+          nazu.sendMessage(from, {
+            image: { url: thumbnail },
+            caption
+          }).catch(err => {
+            console.error('Erro ao enviar thumbnail do Twitch:', err);
+          });
+        }
 
-      // Enviar o vídeo
-      const fileSize = buffer.length;
-      const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(2);
+        const fileSize = buffer.length;
+        const fileSizeMB = (fileSize / (1024 * 1024)).toFixed(2);
 
-      if (fileSize > 100 * 1024 * 1024) { // > 100MB
-        nazu.sendMessage(from, {
-          document: buffer,
-          mimetype: 'video/mp4',
-          fileName: filename
-        }, { quoted: info }).then(() => {
-          reply(`✅ Vídeo enviado como documento (${fileSizeMB}MB).`);
-        }).catch(err => {
-          console.error('Erro ao enviar documento do Twitch:', err);
-          reply('❌ Erro ao enviar o vídeo. O arquivo pode ser muito grande.');
-        });
-      } else {
-        nazu.sendMessage(from, {
+        if (fileSize > 100 * 1024 * 1024) {
+          return nazu.sendMessage(from, {
+            document: buffer,
+            mimetype: 'video/mp4',
+            fileName: filename
+          }, { quoted: info })
+            .then(() => reply(`✅ Vídeo enviado como documento (${fileSizeMB}MB).`))
+            .catch(err => {
+              console.error('Erro ao enviar documento do Twitch:', err);
+              reply('❌ Erro ao enviar o vídeo. O arquivo pode ser muito grande.');
+            });
+        }
+
+        return nazu.sendMessage(from, {
           video: buffer,
           mimetype: 'video/mp4',
           fileName: filename
-        }, { quoted: info }).then(() => {
-          reply(`✅ Vídeo do Twitch baixado com sucesso! (${fileSizeMB}MB)`);
-        }).catch(err => {
-          console.error('Erro ao enviar vídeo do Twitch:', err);
-          reply('❌ Erro ao enviar o vídeo. Tente novamente.');
+        }, { quoted: info }).catch((videoError) => {
+          if (String(videoError).includes("ENOSPC") || String(videoError).includes("size")) {
+            return reply('📦 Vídeo muito grande, enviando como documento...')
+              .then(() => nazu.sendMessage(from, {
+                document: buffer,
+                mimetype: 'video/mp4',
+                fileName: filename
+              }, { quoted: info }))
+              .catch(err => console.error('Erro ao enviar documento do Twitch:', err));
+          }
+          console.error('Erro ao enviar vídeo do Twitch:', videoError);
+          return reply('❌ Erro ao enviar o vídeo. Tente novamente.');
         });
-      }
-    }).catch(error => {
-      console.error('Erro ao baixar do Twitch:', error);
-      
-      if (error.message?.includes('401') || error.message?.includes('403')) {
-        ia.notifyOwnerAboutApiKey(nazu, nmrdn, `Erro de autenticação na API: ${error.message}`);
-        return reply('❌ Erro de autenticação da API. O dono foi notificado.');
-      }
-      
-      if (error.message?.includes('404')) {
-        return reply('❌ Vídeo não encontrado. Verifique se o link está correto e se o vídeo ainda está disponível.');
-      }
-      
-      if (error.message?.includes('timeout')) {
-        return reply('❌ O download demorou muito tempo. Tente novamente com um vídeo mais curto.');
-      }
-      
-      reply('❌ Erro ao baixar o vídeo do Twitch. Tente novamente mais tarde.');
-    });
+      })
+      .catch((error) => {
+        console.error('Erro ao baixar do Twitch:', error);
+        
+        if (error.message?.includes('401') || error.message?.includes('403')) {
+          ia.notifyOwnerAboutApiKey(nazu, nmrdn, `Erro de autenticação na API: ${error.message}`);
+          return reply('❌ Erro de autenticação da API. O dono foi notificado.');
+        }
+        
+        if (error.message?.includes('404')) {
+          return reply('❌ Vídeo não encontrado. Verifique se o link está correto e se o vídeo ainda está disponível.');
+        }
+        
+        if (error.message?.includes('timeout')) {
+          return reply('❌ O download demorou muito tempo. Tente novamente com um vídeo mais curto.');
+        }
+        
+        reply('❌ Erro ao baixar o vídeo do Twitch. Tente novamente mais tarde.');
+      });
   } catch (error) {
     console.error('Erro no comando twitch:', error);
     reply("❌ Ocorreu um erro ao processar sua solicitação.");
@@ -21024,21 +21015,24 @@ case 'streamabledl':
 
           reply('Aguarde um momentinho... ☀️');
           igdl.dl(q, KeyCog)
-            .then(async (datinha) => {
+            .then((datinha) => {
               if (!datinha.ok) return reply(datinha.msg);
 
-              for (const item of datinha.data) {
-                await nazu.sendMessage(from, {
+              const sendAll = datinha.data.reduce((promiseChain, item) => {
+                return promiseChain.then(() => nazu.sendMessage(from, {
                   [item.type]: item.buff
-                }, {
-                  quoted: info
-                });
-              }
+                }, { quoted: info }));
+              }, Promise.resolve());
+
+              return sendAll.catch((sendErr) => {
+                console.error('Erro ao enviar mídia do Instagram:', sendErr);
+                reply('❌ Ocorreu um erro ao enviar a mídia do Instagram.');
+              });
             })
-            .catch(async (e) => {
+            .catch((e) => {
               console.error('Erro no comando Instagram (promise):', e);
               if (e.message && e.message.includes('API key inválida')) {
-                await notifyOwnerAboutApiKey(nazu, nmrdn, e.message, "Instagram", prefix);
+                notifyOwnerAboutApiKey(nazu, nmrdn, e.message, "Instagram", prefix).catch(() => {});
                 return reply('🤖 *Sistema de Instagram temporariamente indisponível*\n\n😅 Estou com problemas técnicos no momento. O administrador já foi notificado!\n\n⏰ Tente novamente em alguns minutos.');
               }
               reply("❌ Ocorreu um erro ao processar sua solicitação. Por favor, tente novamente mais tarde.");
@@ -21049,7 +21043,7 @@ case 'streamabledl':
           
           // Verificar se é erro de API key e notificar o dono
           if (e.message && e.message.includes('API key inválida')) {
-            await notifyOwnerAboutApiKey(nazu, nmrdn, e.message, "Instagram", prefix);
+            notifyOwnerAboutApiKey(nazu, nmrdn, e.message, "Instagram", prefix).catch(() => {});
             return reply('🤖 *Sistema de Instagram temporariamente indisponível*\n\n😅 Estou com problemas técnicos no momento. O administrador já foi notificado!\n\n⏰ Tente novamente em alguns minutos.');
           }
           
@@ -21564,18 +21558,24 @@ case 'streamabledl':
           const pinPromise = isPinUrl ? pinterest.dl(searchTerm, KeyCog) : pinterest.search(searchTerm, KeyCog);
 
           pinPromise
-            .then(async (datinha) => {
+            .then((datinha) => {
               if (!datinha.ok || !datinha.urls || datinha.urls.length === 0) {
                 return reply(isPinUrl ? 'Não foi possível baixar este link do Pinterest. 😕' : 'Nenhuma imagem encontrada para o termo pesquisado. 😕');
               }
 
               const itemsToSend = datinha.urls.slice(0, maxImages);
-              for (const url of itemsToSend) {
-            const message = isPinUrl && datinha.type === 'video'
-              ? { video: { url }, caption: '📌 Download do Pinterest' }
-              : { image: { url }, caption: isPinUrl ? '📌 Download do Pinterest' : `📌 Resultado da pesquisa por "${searchTerm}"` };
-            await nazu.sendMessage(from, message, { quoted: info });
-              }
+              const sendChain = itemsToSend.reduce((promiseChain, url) => {
+                const message = isPinUrl && datinha.type === 'video'
+                  ? { video: { url }, caption: '📌 Download do Pinterest' }
+                  : { image: { url }, caption: isPinUrl ? '📌 Download do Pinterest' : `📌 Resultado da pesquisa por "${searchTerm}"` };
+
+                return promiseChain.then(() => nazu.sendMessage(from, message, { quoted: info }));
+              }, Promise.resolve());
+
+              return sendChain.catch(sendErr => {
+                console.error('Erro ao enviar mídia do Pinterest:', sendErr);
+                reply('❌ Ocorreu um erro ao enviar a mídia do Pinterest.');
+              });
             })
             .catch((e) => {
               console.error('Erro no comando pinterest (promise):', e);
@@ -21768,15 +21768,14 @@ case 'streamabledl':
             const audioPath = getMenuAudioPath();
             if (audioPath && fs.existsSync(audioPath)) {
               const audioBuffer = fs.readFileSync(audioPath);
-              await nazu.sendMessage(from, {
+              nazu.sendMessage(from, {
                 audio: audioBuffer,
                 mimetype: 'audio/mpeg',
                 ptt: false
               }, {
                 quoted: info
-              }).then(async () => {
-                // Depois envia o menu
-                await nazu.sendMessage(from, {
+              }).then(() => {
+                return nazu.sendMessage(from, {
                   [useVideo ? 'video' : 'image']: mediaBuffer,
                   caption: lerMaisPrefix + menuText,
                   gifPlayback: useVideo,
@@ -21784,28 +21783,30 @@ case 'streamabledl':
                 }, {
                   quoted: info
                 });
+              }).catch(err => {
+                console.error('Erro ao enviar áudio ou menu:', err);
               });
             } else {
               // Se não tem áudio válido, envia só o menu
-              await nazu.sendMessage(from, {
+              nazu.sendMessage(from, {
                 [useVideo ? 'video' : 'image']: mediaBuffer,
                 caption: lerMaisPrefix + menuText,
                 gifPlayback: useVideo,
                 mimetype: useVideo ? 'video/mp4' : 'image/jpeg'
               }, {
                 quoted: info
-              });
+              }).catch(err => console.error('Erro ao enviar menu:', err));
             }
           } else {
             // Se áudio não está ativo, envia só o menu
-            await nazu.sendMessage(from, {
+            nazu.sendMessage(from, {
               [useVideo ? 'video' : 'image']: mediaBuffer,
               caption: lerMaisPrefix + menuText,
               gifPlayback: useVideo,
               mimetype: useVideo ? 'video/mp4' : 'image/jpeg'
             }, {
               quoted: info
-            });
+            }).catch(err => console.error('Erro ao enviar menu:', err));
           }
         } catch (error) {
           console.error('Erro ao enviar menu:', error);
@@ -25848,7 +25849,7 @@ ${prefix}togglecmdvip premium_ia off`);
           
           await nazu.sendMessage(from, {
             image: { url: bannerUrl },
-            caption: `╭━━━⊱ ⚡ *STATUS DA CONEXÃO* ⚡ ⊱━━━╮
+            caption: `╭━⊱ ⚡ *STATUS DA CONEXÃO* ⚡ ⊱━╮
 │
 │ 📡 *Informações de Latência*
 │ ├─ ${statusEmoji} Velocidade: *${speedConverted.toFixed(3)}s*
