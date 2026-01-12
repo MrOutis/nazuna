@@ -1352,7 +1352,7 @@ async function createBotSocket(authDir) {
                 
                 reconnectTimer = setTimeout(() => {
                     reconnectAttempts = 0; // Reset ao reconectar por desconexão normal
-                    forbidden403Attempts = 0; // Reset contador de erro 403
+                    // Não resetar forbidden403Attempts - deve persistir até atingir limite
                     startNazu();
                 }, reconnectDelay);
             }
@@ -1375,10 +1375,12 @@ async function startNazu() {
     
     try {
         reconnectAttempts = 0; // Reset contador ao conectar com sucesso
-        forbidden403Attempts = 0; // Reset contador de erro 403
+        // Não resetar forbidden403Attempts - deve persistir até atingir limite ou sucesso real
         console.log('🚀 Iniciando Nazuna...');
         await createBotSocket(AUTH_DIR);
         isReconnecting = false; // Conexão estabelecida com sucesso
+        // Reset forbidden403Attempts apenas após conexão bem-sucedida
+        forbidden403Attempts = 0;
     } catch (err) {
         reconnectAttempts++;
         console.error(`❌ Erro ao iniciar o bot (tentativa ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS}): ${err.message}`);
