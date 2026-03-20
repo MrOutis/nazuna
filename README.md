@@ -23,7 +23,7 @@ No entanto, o desenvolvimento não parou. O projeto foi assumido pelo dev **Toky
 Atualmente, o bot segue em **desenvolvimento ativo**, recebendo atualizações, melhorias e correções, além de permanecer **open source para toda a comunidade**.
 
 <p align="center">
-  <a href="https://github.com/devcrician/nazuna">
+  <a href="https://github.com/DevTokyoVx/nazuna">
     <img src="https://img.shields.io/badge/Projeto%20Atual-Tokyo%20Dev-181717?style=for-the-badge&logo=github" />
   </a>
 </p>
